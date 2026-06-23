@@ -1,12 +1,24 @@
 from datetime import datetime
+from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class WatchlistItemBase(BaseModel):
-    ticker: str
-    company_name: str | None = None
-    notes: str | None = None
+    ticker: str = Field(
+        description="Stock ticker symbol; normalized to upper-case.",
+        examples=["AAPL"],
+    )
+    company_name: str | None = Field(
+        default=None,
+        description="Optional human-readable company name.",
+        examples=["Apple Inc."],
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Optional free-text notes about the position.",
+        examples=["core holding"],
+    )
 
     @field_validator("ticker")
     @classmethod
@@ -38,11 +50,25 @@ class WatchlistItemRead(WatchlistItemBase):
 
 
 class FinanceNoteBase(BaseModel):
-    ticker: str
-    title: str
-    content: str
-    tags: list[str] = Field(default_factory=list)
-    source_url: str | None = None
+    ticker: str = Field(
+        description="Ticker the note is about; normalized to upper-case.",
+        examples=["AAPL"],
+    )
+    title: str = Field(description="Short note title.", examples=["Q3 earnings beat"])
+    content: str = Field(
+        description="Note body.",
+        examples=["Revenue up on iPhone + Services."],
+    )
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Tags; accepts a list or a comma-separated string.",
+        examples=[["earnings", "bullish"]],
+    )
+    source_url: str | None = Field(
+        default=None,
+        description="Optional source link; must start with http:// or https://.",
+        examples=["https://example.com/report"],
+    )
 
     @field_validator("ticker")
     @classmethod
@@ -119,3 +145,17 @@ class IngestResult(BaseModel):
     created: int
     skipped: int
     items: list[FinanceNoteRead]
+
+
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    """A paginated list response: one page of ``items`` plus the metadata a
+    client needs to fetch the rest (``total`` matching rows, and the
+    ``limit``/``offset`` used for this page)."""
+
+    items: list[T]
+    total: int = Field(description="Total rows matching the query, ignoring paging.")
+    limit: int = Field(description="Maximum rows returned in this page.")
+    offset: int = Field(description="Rows skipped before this page.")

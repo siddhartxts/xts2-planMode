@@ -1,7 +1,7 @@
 from typing import Annotated, Type, TypeVar
 
 from fastapi import Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Query as SqlQuery, Session
 
 from database import Base, get_db
 
@@ -39,3 +39,22 @@ class Pagination:
 
 # Inject pagination into a route with:  page: PaginationParams
 PaginationParams = Annotated[Pagination, Depends()]
+
+
+def paginate(query: SqlQuery, page: Pagination) -> dict:
+    """Run a list ``query`` as a single page and package it for a ``schemas.Page``
+    response: the total row count (ignoring paging) plus the requested slice.
+
+    Centralizing this means every list endpoint counts and slices identically.
+    ``order_by(None)`` strips any ORDER BY for the COUNT (it's irrelevant there
+    and keeps the SQL clean); the items query keeps whatever ordering the caller
+    applied.
+    """
+    total = query.order_by(None).count()
+    items = query.offset(page.offset).limit(page.limit).all()
+    return {
+        "items": items,
+        "total": total,
+        "limit": page.limit,
+        "offset": page.offset,
+    }

@@ -3,13 +3,16 @@ from sqlalchemy import or_
 from sqlalchemy.dialects.postgresql import JSONB
 
 import schemas
-from deps import PaginationParams, db_dependency, get_or_404
+from deps import PaginationParams, db_dependency, get_or_404, paginate
 from models import FinanceNote
 
 router = APIRouter(prefix="/financenotes", tags=["financenotes"])
 
+# Reusable OpenAPI response docs for this router's error cases.
+NOT_FOUND = {404: {"description": "Finance note not found"}}
 
-@router.get("/", status_code=200, response_model=list[schemas.FinanceNoteRead])
+
+@router.get("/", response_model=schemas.Page[schemas.FinanceNoteRead])
 def read_finance_notes(
     db: db_dependency,
     page: PaginationParams,
@@ -33,16 +36,14 @@ def read_finance_notes(
         # operator. This branch runs on PostgreSQL only.
         query = query.filter(FinanceNote.tags.cast(JSONB).contains([tag.strip()]))
 
-    return (
-        query.order_by(FinanceNote.created_at.desc())
-        .offset(page.offset)
-        .limit(page.limit)
-        .all()
-    )
+    query = query.order_by(FinanceNote.created_at.desc())
+    return paginate(query, page)
 
 
 @router.get(
-    "/{finance_note_id}", status_code=200, response_model=schemas.FinanceNoteRead
+    "/{finance_note_id}",
+    response_model=schemas.FinanceNoteRead,
+    responses=NOT_FOUND,
 )
 def read_finance_note_by_id(db: db_dependency, finance_note_id: int = Path(gt=0)):
     return get_or_404(db, FinanceNote, finance_note_id, "Finance note not found")
@@ -59,7 +60,11 @@ def create_finance_note(
     return finance_note
 
 
-@router.put("/{finance_note_id}", response_model=schemas.FinanceNoteRead)
+@router.put(
+    "/{finance_note_id}",
+    response_model=schemas.FinanceNoteRead,
+    responses=NOT_FOUND,
+)
 def update_finance_note(
     db: db_dependency,
     finance_note_request: schemas.FinanceNoteCreate,
@@ -77,7 +82,7 @@ def update_finance_note(
     return finance_note
 
 
-@router.delete("/{finance_note_id}")
+@router.delete("/{finance_note_id}", status_code=204, responses=NOT_FOUND)
 def delete_finance_note(
     db: db_dependency,
     finance_note_id: int = Path(gt=0),
@@ -85,4 +90,4 @@ def delete_finance_note(
     finance_note = get_or_404(db, FinanceNote, finance_note_id, "Finance note not found")
     db.delete(finance_note)
     db.commit()
-    return {"message": "Finance note deleted successfully"}
+    # 204 No Content: no response body.
