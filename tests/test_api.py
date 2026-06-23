@@ -1,7 +1,38 @@
+from sqlalchemy.exc import SQLAlchemyError
+
+from database import get_db
+from main import app
+
+
 def test_health(client):
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_health_ready(client):
+    # SQLite answers SELECT 1, so readiness passes.
+    response = client.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
+def test_health_ready_db_down(client):
+    # Simulate an unreachable database: the SELECT 1 raises, readiness -> 503.
+    class _BrokenSession:
+        def execute(self, *args, **kwargs):
+            raise SQLAlchemyError("database is down")
+
+        def close(self):
+            pass
+
+    def broken_get_db():
+        yield _BrokenSession()
+
+    app.dependency_overrides[get_db] = broken_get_db  # cleared by the client fixture
+    response = client.get("/health/ready")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "database unavailable"
 
 
 def test_watchlist_crud(client):

@@ -1,3 +1,11 @@
+import os
+
+# config.py requires SQLALCHEMY_DATABASE_URL (no default — fail fast in prod).
+# The tests never touch the real engine (get_db is overridden with in-memory
+# SQLite below), but importing `database` still constructs an engine at import
+# time, so provide a harmless dummy URL before those imports run.
+os.environ.setdefault("SQLALCHEMY_DATABASE_URL", "sqlite://")
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
