@@ -433,6 +433,15 @@ As shown in [the startup flow](#6-startup-flow), `entrypoint.sh` runs
 `alembic upgrade head` every time the `api` container boots. So when you
 `docker compose up`, the database is brought to the latest schema automatically.
 
+> **Single-instance caveat (worth knowing before you deploy).** Migrating from the
+> container's entrypoint is safe here because there is exactly **one** `api`
+> container. If you ever run **multiple** API replicas, they would all run
+> `alembic upgrade head` at the same boot and could race each other. The
+> production fix is to run migrations as a **separate deploy step** — one job that
+> applies migrations *before* the app replicas start — not from each replica's
+> entrypoint. For this single-host dev stack, the entrypoint approach is the right
+> amount of machinery; revisit it when you move to multi-instance deployment.
+
 ### When you change a model: create and apply a migration in the container
 
 Run Alembic **inside the `api` container**, because that container has the project
@@ -605,10 +614,23 @@ Below is every endpoint currently implemented. All examples assume the API is at
 > exercised by the SQLite-based tests.
 
 ### `GET /health` — liveness check
-- **File:** `src/main.py` · **Table touched:** none — returns `{"status": "ok"}`.
+- **File:** `src/routers/health.py` · **Table touched:** none — returns
+  `{"status": "ok"}`. Answers "is the process up?" *without* touching the
+  database, so it stays green even when Postgres is down. This is what the Docker
+  healthcheck calls.
 
 ```bash
 curl http://localhost:8000/health
+```
+
+### `GET /health/ready` — readiness check
+- **File:** `src/routers/health.py` · **Table touched:** runs `SELECT 1`.
+  Answers "can the app actually serve traffic?" Returns `200 {"status": "ready"}`
+  when the database answers, or **`503`** when it is unreachable — what a load
+  balancer / orchestrator should poll before routing traffic to this instance.
+
+```bash
+curl -i http://localhost:8000/health/ready
 ```
 
 ### Watchlist — `src/routers/watchlist.py` (table: `watchlist`)
@@ -912,18 +934,21 @@ Every important file, what it is, and when *you* would touch it.
 The app uses a **flat import layout**: it runs with `--app-dir src`, so files say
 `from models import …` and `from routers import …`, *not* `from src.models import …`.
 
-- **`src/main.py`** — creates the FastAPI app, defines `/health`, wires in the three
-  routers.
+- **`src/main.py`** — creates the FastAPI app (title/version from `settings`) and
+  wires in the routers (`health`, `watchlist`, `financenotes`, `ingest`).
 - **`src/database.py`** — the SQLAlchemy engine, `SessionLocal`, the `Base`, and the
   `get_db` dependency.
-- **`src/config.py`** — a Pydantic-Settings class; right now its only setting is the
-  database URL.
+- **`src/config.py`** — a Pydantic-Settings class. `SQLALCHEMY_DATABASE_URL` is
+  **required** (no default — the app fails fast at startup if it's missing instead
+  of silently connecting somewhere); it also holds `environment`, `log_level`, and
+  the `app_name`/`app_version` shown on the `/docs` page.
 - **`src/models.py`** — the SQLAlchemy models `WatchlistItem` and `FinanceNote` (the
   database *tables*).
 - **`src/schemas.py`** — the Pydantic schemas (request/response shapes + validators).
 - **`src/deps.py`** — shared dependencies: `db_dependency`, `get_or_404`, and the
   `Pagination` (`limit`/`offset`) params.
-- **`src/routers/`** — `watchlist.py` (CRUD), `financenotes.py` (CRUD + search),
+- **`src/routers/`** — `health.py` (`/health` liveness + `/health/ready`
+  readiness), `watchlist.py` (CRUD), `financenotes.py` (CRUD + search),
   `ingest.py` (bulk idempotent ingest), and an empty `__init__.py`.
 
 ### Tests — `tests/`
@@ -947,30 +972,37 @@ tiny:
 
 ```python
 from fastapi import FastAPI
-from routers import financenotes, ingest, watchlist
 
-app = FastAPI()
+from config import settings
+from routers import financenotes, health, ingest, watchlist
 
-@app.get("/health", tags=["health"])
-def health():
-    return {"status": "ok"}
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.app_version,
+    description="...",
+)
 
+app.include_router(health.router)
 app.include_router(watchlist.router)
 app.include_router(financenotes.router)
 app.include_router(ingest.router)
 ```
 
-- `app = FastAPI()` creates the application object. This `app` is what uvicorn runs
-  inside the container (`uvicorn main:app`). It also powers the auto-generated
-  `/docs`.
-- `@app.get("/health")` registers a handler for `GET /health`; FastAPI turns its
-  return value into the JSON `{"status": "ok"}`.
+- `app = FastAPI(title=..., version=...)` creates the application object; the
+  title/version come from `config.settings`, so the auto-generated `/docs` page is
+  labelled with the app's name and version. This `app` is what uvicorn runs inside
+  the container (`uvicorn main:app`).
 - `app.include_router(...)` plugs in each **router** — a group of related endpoints
-  in its own file with a shared URL prefix (`/watchlist`, `/financenotes`,
-  `/ingest`). This keeps `main.py` small.
+  in its own file with a shared URL prefix (`/health`, `/watchlist`,
+  `/financenotes`, `/ingest`). This keeps `main.py` small; even the health
+  endpoints live in their own `src/routers/health.py`.
 
-**`/health`** is a trivial endpoint that returns `200 OK` without touching the
-database — the Docker health check and any monitor call it to ask "are you alive?".
+**`/health`** returns `200 OK` without touching the database — the Docker health
+check calls it to ask "are you alive?" (**liveness**). Its sibling
+**`/health/ready`** *does* ping the database (`SELECT 1`) and returns `503` when it
+can't, answering "can you serve traffic?" (**readiness**). Keeping the two
+separate is a standard production pattern: a process can be alive but not yet
+ready (e.g. the DB is still starting).
 
 **`/docs`** (Swagger UI) and **`/redoc`** (ReDoc) are generated automatically from
 your routes and Pydantic schemas. You didn't write those pages; they're derived

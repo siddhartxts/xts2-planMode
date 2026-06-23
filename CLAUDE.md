@@ -34,12 +34,12 @@ This is also why:
 
 Request flow: `main.py` mounts three routers → each router declares an `APIRouter(prefix=...)` and depends on shared helpers → SQLAlchemy ORM models → PostgreSQL.
 
-- **`main.py`** — creates `app`, exposes `/health`, includes the `watchlist`, `financenotes`, and `ingest` routers.
+- **`main.py`** — creates `app` (title/version from `settings`) and includes the `health`, `watchlist`, `financenotes`, and `ingest` routers. `/health` (pure liveness, no DB) and `/health/ready` (runs `SELECT 1`, returns `503` when the DB is unreachable) live in `routers/health.py`.
 - **`models.py`** — SQLAlchemy 2.0 ORM models (`WatchlistItem`, `FinanceNote`). `created_at` uses `server_default=func.now()` so DB-side inserts get correct timestamps. `FinanceNote.external_id` is a unique nullable column that makes ingestion idempotent.
 - **`schemas.py`** — Pydantic v2 models. Validators normalize input (tickers uppercased/stripped, tags coerced from CSV string→list, `source_url` must be http(s)). Note the `*Base` / `*Create` / `*Read` / `*Ingest` split; `*Read` uses `from_attributes=True`.
 - **`deps.py`** — shared dependencies: `db_dependency` (injected `Session`), `get_or_404(db, Model, id, detail)` (replaces repeated query/None/404 blocks), and `Pagination`/`PaginationParams` (`?limit=&offset=`).
 - **`database.py`** — engine/`SessionLocal`/`Base` and the `get_db` generator dependency.
-- **`config.py`** — `pydantic-settings` `Settings`; the only setting is `sqlalchemy_database_url` (env var `SQLALCHEMY_DATABASE_URL`, loaded from `.env` if present).
+- **`config.py`** — `pydantic-settings` `Settings`. `sqlalchemy_database_url` (env var `SQLALCHEMY_DATABASE_URL`, loaded from `.env` if present) is **required** — there is no default, so a missing value raises at startup ("fail fast"). Also defines `environment`, `log_level`, and `app_name`/`app_version` (the latter two label the `/docs` page). Because the engine is built at import time, tests inject a dummy `SQLALCHEMY_DATABASE_URL` at the top of `tests/conftest.py`.
 
 ### Routers
 - **`watchlist.py`** — CRUD. `IntegrityError` on the unique `ticker` is translated to HTTP 409.
@@ -50,7 +50,7 @@ Request flow: `main.py` mounts three routers → each router declares an `APIRou
 
 - Alembic migrations live in `alembic/versions/`. `env.py` reads the DB URL from `SQLALCHEMY_DATABASE_URL` (falling back to `alembic.ini`'s empty `sqlalchemy.url`), and uses `models.Base.metadata` as the autogenerate target.
 - The `pgvector` extension is enabled by migration `c3e7f1a2b4d6`, but **no vector/embedding column exists on the models yet** — the extension is provisioned ahead of future semantic-search work. The Docker DB image is `pgvector/pgvector:pg16`.
-- In Docker, `entrypoint.sh` waits for Postgres, runs `alembic upgrade head`, then starts uvicorn — migrations are applied automatically on container start.
+- In Docker, `entrypoint.sh` waits for Postgres, runs `alembic upgrade head`, then starts uvicorn — migrations are applied automatically on container start. This is safe only because there is a **single** `api` container; multiple replicas would race on `upgrade head`, so a multi-instance deploy must run migrations as a separate pre-start step rather than from each replica's entrypoint.
 
 ## Testing
 
