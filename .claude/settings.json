@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -iE \"gitignore|github|readme|test|\\\\.git$\")",
+      "Bash(.venv/bin/python -c \"import sys; sys.path.insert\\(0,'src'\\); import main; print\\('app imports OK; routes:', sorted\\({r.path for r in main.app.routes if r.path.startswith\\(\\('/watchlist','/financenotes','/ingest','/health'\\)\\)}\\)\\)\")",
+      "Bash(.venv/bin/python -m pytest -q)",
+      "Bash(grep -n \"make dev\\\\|^pytest\\\\| pytest$\\\\|run on the host\\\\|host uvicorn\" README.md)"
+    ]
+  }
+}
